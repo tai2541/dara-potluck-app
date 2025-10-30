@@ -67,3 +67,17 @@ button.primary{background:var(--violet); color:white; border-color:var(--violet)
 /* Panda */
 .panda{position:absolute; z-index:30; user-select:none; pointer-events:none; transform:translate(-50%,-50%); filter: drop-shadow(0 1px 0 rgba(0,0,0,.1));}
 .panda-emoji{font-size:34px; line-height:1}
+
+/* Prevent chip overflow on mobile */
+.item{ align-items: flex-start; }
+.left{ flex-wrap: wrap; align-items: flex-start; min-width: 0; }
+.badge{ white-space: nowrap; margin-bottom: 4px; }
+
+/* Let long names/notes wrap instead of pushing layout */
+.left .name, .left .sub{ word-break: break-word; overflow-wrap: anywhere; }
+
+/* Stack row on narrow screens so chips never clip */
+@media (max-width: 520px){
+  .item{ flex-direction: column; align-items: flex-start; }
+  .actions{ align-self: stretch; justify-content: flex-end; }
+}
