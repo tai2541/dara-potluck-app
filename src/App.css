@@ -1,0 +1,69 @@
+
+:root{
+  --bg1:#f5f1ff; --bg2:#fdf7f2; --bg3:#f2fbff;
+  --muted:#6b7280; --text:#1f2937; --card:#ffffff;
+  --violet:#8b5cf6; --violet-200:#e9defc;
+  --green:#22c55e; --yellow:#facc15; --red:#ef4444;
+  --green-100:#dcfce7; --green-700:#15803d;
+  --yellow-100:#fef9c3; --yellow-700:#a16207;
+  --red-100:#fee2e2; --red-700:#b91c1c;
+  --border:#e5e7eb;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  color:var(--text);
+  background: linear-gradient(135deg,var(--bg1),var(--bg2),var(--bg3));
+  min-height:100vh;
+}
+.container{max-width:1000px; margin:0 auto; padding:24px 24px 56px;}
+.header{position:relative; display:flex; gap:16px; flex-wrap:wrap; align-items:center; justify-content:space-between;}
+h1{margin:0; font-size:28px; display:flex; align-items:center; gap:8px; font-weight:650; letter-spacing:.2px;}
+.muted{color:var(--muted); font-size:14px; margin-top:4px}
+.card{background:rgba(255,255,255,.8); border:1px solid var(--violet-200); border-radius:16px; padding:16px; box-shadow: 0 2px 0 var(--violet-200);}
+.grid{display:grid; gap:8px}
+.grid-6{grid-template-columns: repeat(6, minmax(0,1fr));}
+@media (max-width:900px){ .grid-6{grid-template-columns: repeat(3, minmax(0,1fr));} }
+@media (max-width:520px){ .grid-6{grid-template-columns: repeat(2, minmax(0,1fr));} }
+.chip{display:inline-flex; align-items:center; gap:6px; padding:2px 8px; border-radius:999px; font-size:12px; border:1px solid transparent;}
+.legend{display:flex; gap:10px; align-items:center; justify-content:flex-end; font-size:12px}
+.dot{width:10px; height:10px; border-radius:999px; display:inline-block}
+.bar{display:flex; width:100%; height:12px; overflow:hidden; border:1px solid var(--border); border-radius:999px}
+.row{display:flex; gap:8px; align-items:end; flex-wrap:wrap}
+.row > .field{flex:1 1 160px; min-width:160px}
+label{display:block; font-size:12px; color:var(--muted); margin-bottom:6px}
+input[type="text"], select{
+  width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border); background:#fff; outline:none;
+}
+input::placeholder{color:#9ca3af}
+button{
+  padding:10px 14px; border-radius:12px; border:1px solid var(--border); background:#fff; cursor:pointer; font-weight:600;
+}
+button.primary{background:var(--violet); color:white; border-color:var(--violet)}
+.list{display:flex; flex-direction:column; gap:8px}
+.item{display:flex; align-items:center; justify-content:space-between; gap:10px; border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:#fff;}
+.left{display:flex; align-items:center; gap:10px}
+.badge{border:1px solid var(--violet-200); background:#f8f5ff; padding:4px 8px; border-radius:999px; font-size:12px; text-transform:capitalize}
+.name{font-weight:600}
+.sub{font-size:13px; color:var(--muted)}
+.actions{display:flex; gap:6px}
+.danger{background:#fff; color:var(--red-700); border-color:#fecaca}
+.secondary{background:#f9fafb}
+.search{max-width:340px}
+.hidden{display:none}
+.footer-right{text-align:right; font-size:12px}
+.total-badge{display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:#fff}
+.empty{padding:12px; color:var(--muted)}
+.header-bounds{position:relative; min-height:90px;}
+.sparkle{display:inline-flex; vertical-align:middle}
+.cat-checks{display:flex; gap:10px; flex-wrap:wrap}
+.cat-check{display:flex; align-items:center; gap:6px; background:#fff; border:1px solid var(--border); padding:6px 10px; border-radius:999px; font-size:13px}
+.cat-check input{transform:translateY(1px)}
+/* Modal */
+.modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,.15); display:flex; align-items:center; justify-content:center;}
+.modal{border:none; border-radius:16px; background:#fff; padding:16px; width:min(520px, calc(100% - 24px));}
+.modal-header{font-weight:700; margin-bottom:8px; font-size:16px}
+.modal-actions{display:flex; justify-content:flex-end; gap:8px; margin-top:12px}
+/* Panda */
+.panda{position:absolute; z-index:30; user-select:none; pointer-events:none; transform:translate(-50%,-50%); filter: drop-shadow(0 1px 0 rgba(0,0,0,.1));}
+.panda-emoji{font-size:34px; line-height:1}
