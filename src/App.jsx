@@ -14,25 +14,49 @@ function Panda({ headerRef, anchorRef }){
   React.useEffect(()=>{
     const header = headerRef.current
     const anchor = anchorRef.current
-    if(!header || !anchor) return
+    const el = elRef.current
+    if(!header || !anchor || !el) return
+
     const hb = header.getBoundingClientRect()
     const ab = anchor.getBoundingClientRect()
-    const clamp = (v,min,max)=> Math.max(min, Math.min(max,v))
-    const x = clamp(ab.left - hb.left + ab.width/2, 24, hb.width-24)
-    const y = clamp(ab.top - hb.top + ab.height/2 - 24, 24, Math.max(60, hb.height*0.6))
-    const el = elRef.current
-    if(el){ el.style.left = x+'px'; el.style.top = y+'px' }
-    posRef.current = { x, y }
-    targetRef.current = { x, y }
-  }, [headerRef, anchorRef])
+    const initial = {
+      x: ab.left - hb.left + ab.width/2,
+      y: ab.top - hb.top + ab.height/2
+    }
+    posRef.current = initial
+    targetRef.current = initial
+    el.style.transform = `translate(${initial.x}px,${initial.y}px)`
+
+    let raf
+    function step(){
+      const now = performance.now()
+      const dt = Math.min(32, now - lastMouseRef.current)
+      const stiffness = 0.0028
+      const damping = 0.16
+      const { x:tx, y:ty } = targetRef.current
+      let { x:px, y:py } = posRef.current
+      const vx = (tx - px) * stiffness * dt
+      const vy = (ty - py) * stiffness * dt
+      px += vx
+      py += vy
+      px += (Math.random()-0.5) * 0.04 * dt
+      py += (Math.random()-0.5) * 0.04 * dt
+      posRef.current = { x:px, y:py }
+      el.style.transform = `translate(${px}px,${py}px)`
+      raf = requestAnimationFrame(step)
+    }
+    raf = requestAnimationFrame(step)
+    return ()=> cancelAnimationFrame(raf)
+  }, [headerRef])
 
   React.useEffect(()=>{
     const header = headerRef.current
     if(!header) return
-    const clamp = (v,min,max)=> Math.max(min, Math.min(max,v))
-    const onMove = (e)=>{
-      const hb = header.getBoundingClientRect()
-      if(e.clientX < hb.left || e.clientX > hb.right || e.clientY < hb.top || e.clientY > hb.bottom) return
+    const hb = header.getBoundingClientRect()
+
+    function clamp(v,min,max){ return Math.max(min, Math.min(max,v)) }
+
+    function onMove(e){
       const mx = e.clientX - hb.left
       const my = e.clientY - hb.top
       const { x:px, y:py } = posRef.current
@@ -51,46 +75,6 @@ function Panda({ headerRef, anchorRef }){
     return ()=> window.removeEventListener('mousemove', onMove)
   }, [headerRef])
 
-  React.useEffect(()=>{
-    const header = headerRef.current
-    const el = elRef.current
-    if(!header || !el) return
-    let raf = 0
-
-    const step = ()=>{
-      const now = performance.now()
-      const idle = now - lastMouseRef.current > 1200
-      const hb = header.getBoundingClientRect()
-      const width = hb.width, height = hb.height
-
-      if(idle){
-        const cx = width * 0.5
-        const ax = Math.max(40, Math.min(160, width * 0.18))
-        const swayX = cx + Math.sin(now/650) * ax
-        const bobY = Math.max(30, Math.min(70, height*0.35)) + Math.sin(now/900) * 8
-        targetRef.current = { x: Math.max(24, Math.min(width-24, swayX)), y: Math.max(24, Math.min(height-24, bobY)) }
-      }
-
-      const pos = posRef.current
-      const tx = targetRef.current.x
-      const ty = targetRef.current.y
-      const nx = pos.x + (tx - pos.x) * 0.1
-      const ny = pos.y + (ty - pos.y) * 0.1
-
-      posRef.current = { x: nx, y: ny }
-      el.style.left = nx+'px'
-      el.style.top = ny+'px'
-
-      const wiggle = idle ? Math.sin(now/200) * 3 : 0
-      const angle = Math.max(-12, Math.min(12, (tx - pos.x)*0.1 + wiggle))
-      el.style.transform = `translate(-50%,-50%) rotate(${angle}deg)`
-
-      raf = requestAnimationFrame(step)
-    }
-    raf = requestAnimationFrame(step)
-    return ()=> cancelAnimationFrame(raf)
-  }, [headerRef])
-
   return <div ref={elRef} className="panda"><span className="panda-emoji">🐼</span></div>
 }
 
@@ -106,6 +90,12 @@ export default function App(){
   const [rsvp, setRsvp] = React.useState('yes')
   const [query, setQuery] = React.useState('')
   const [cats, setCats] = React.useState([])
+
+  // Party details (host-facing only)
+  const [partyName, setPartyName] = React.useState('Dara & Friends Potluck')
+  const [partyDateTime, setPartyDateTime] = React.useState('Saturday • 6:00 PM')
+  const [partyLocation, setPartyLocation] = React.useState('Our place')
+  const [partyNotes, setPartyNotes] = React.useState('Theme: cozy dishes, please label allergens if possible.')
 
   // Edit state
   const [edit, setEdit] = React.useState(null)
@@ -157,7 +147,11 @@ export default function App(){
     if(!q) return base
     return base.filter(g => {
       const catsStr = (g.categories||[]).join(' ')
-      return (g.name||'').toLowerCase().includes(q) || (g.dish||'').toLowerCase().includes(q) || catsStr.includes(q) || (g.rsvp||'').includes(q)
+      return (g.name||'').toLowerCase().includes(q)
+        || (g.dish||'').toLowerCase().includes(q)
+        || catsStr.toLowerCase().includes(q)
+        || (g.rsvp||'').toLowerCase().includes(q)
+        || (g.notes||'').toLowerCase().includes(q)
     })
   }, [guests, query])
 
@@ -167,21 +161,39 @@ export default function App(){
 
   async function addGuest(){
     const n = name.trim(), d = dish.trim()
-    if(!n || !d) return
-    if(nameTaken.has(n.toLowerCase())) return
+    if(!n || !d){
+      alert('Please enter a name and dish.')
+      return
+    }
+    if(nameTaken.has(n.toLowerCase())){
+      if(!confirm('Someone with that name is already in the list. Add anyway?')) return
+    }
 
-    const newRow = { name:n, dish:d, categories: cats, rsvp, notes: (notes.trim() || null) }
-    // optimistic UI
-    const tempId = `tmp_${Math.random().toString(36).slice(2,10)}`
+    const newRow = {
+      name: n,
+      dish: d,
+      categories: cats,
+      rsvp,
+      notes: notes.trim() || null
+    }
+
+    // optimistic insert
+    const tempId = `temp-${Math.random().toString(36).slice(2,10)}`
     setGuests(prev => [...prev, { id: tempId, ...newRow, created_at: new Date().toISOString() }])
-    setName(''); setDish(''); setNotes(''); setRsvp('yes'); setCats([])
+    setName('')
+    setDish('')
+    setNotes('')
+    setRsvp('yes')
+    setCats([])
+    setQuery('')
 
-    const { error } = await supabase.from('guests').insert(newRow)
+    const { error, data } = await supabase.from('guests').insert(newRow).select().single()
     if(error){
-      setGuests(prev => prev.filter(g => g.id !== tempId))
-      alert('Could not add guest. Try again.')
+      alert('Could not save guest. Reverting.')
+      await loadGuests()
     }else{
-      loadGuests()
+      // swap temp id with real id
+      setGuests(prev => prev.map(g => g.id === tempId ? data : g))
     }
   }
 
@@ -190,8 +202,8 @@ export default function App(){
   async function saveEdit(){
     if(!edit) return
     const payload = {
-      name: (edit.name||'').trim(),
-      dish: (edit.dish||'').trim(),
+      name: edit.name.trim(),
+      dish: edit.dish.trim(),
       categories: edit.categories || [],
       rsvp: edit.rsvp,
       notes: edit.notes || null
@@ -236,12 +248,12 @@ export default function App(){
           <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12, marginBottom:6}}>
             <div style={{fontWeight:600}}>RSVP Summary</div>
             <div className="legend">
-              <span className="chip" style={{background:'var(--green-100)', color:'var(--green-700)', border:'1px solid #bbf7d0'}}><span className="dot" style={{background:'var(--green)'}}></span> Yes {rsvpCounts.yes}</span>
-              <span className="chip" style={{background:'var(--yellow-100)', color:'var(--yellow-700)', border:'1px solid #fde68a'}}><span className="dot" style={{background:'var(--yellow)'}}></span> Maybe {rsvpCounts.maybe}</span>
-              <span className="chip" style={{background:'var(--red-100)', color:'var(--red-700)', border:'1px solid #fecaca'}}><span className="dot" style={{background:'var(--red)'}}></span> No {rsvpCounts.no}</span>
+              <span className="chip" style={{background:'var(--green-100)', color:'var(--green-700)'}}><span className="dot" style={{background:'var(--green)'}}></span> Yes {rsvpCounts.yes}</span>
+              <span className="chip" style={{background:'var(--yellow-100)', color:'var(--yellow-700)'}}><span className="dot" style={{background:'var(--yellow)'}}></span> Maybe {rsvpCounts.maybe}</span>
+              <span className="chip" style={{background:'var(--red-100)', color:'var(--red-700)'}}><span className="dot" style={{background:'var(--red)'}}></span> No {rsvpCounts.no}</span>
             </div>
           </div>
-          <div className="bar">
+          <div className="rsvp-bar">
             <div style={{background:'var(--green)', width:`${yesPct}%`}} />
             <div style={{background:'var(--yellow)', width:`${maybePct}%`}} />
             <div style={{background:'var(--red)', width:`${noPct}%`}} />
@@ -253,6 +265,67 @@ export default function App(){
 
         <Panda headerRef={headerRef} anchorRef={sparkleRef} />
       </header>
+
+      {/* Party Details */}
+      <section className="card party-details">
+        <div className="party-details-header">
+          <h2 className="party-details-title">🎉 Party Details</h2>
+          <div className="party-details-sub muted">Quick host view</div>
+        </div>
+        <div className="party-details-grid">
+          <div className="field">
+            <label>Party Name</label>
+            <input
+              type="text"
+              value={partyName}
+              onChange={e=>setPartyName(e.target.value)}
+              placeholder="Friendsgiving Potluck"
+            />
+          </div>
+          <div className="field">
+            <label>Date &amp; Time</label>
+            <input
+              type="text"
+              value={partyDateTime}
+              onChange={e=>setPartyDateTime(e.target.value)}
+              placeholder="Sat • 6:00 PM"
+            />
+          </div>
+          <div className="field">
+            <label>Location / Address</label>
+            <input
+              type="text"
+              value={partyLocation}
+              onChange={e=>setPartyLocation(e.target.value)}
+              placeholder="123 Party St, Seattle"
+            />
+          </div>
+          <div className="field">
+            <label>Notes / Theme</label>
+            <input
+              type="text"
+              value={partyNotes}
+              onChange={e=>setPartyNotes(e.target.value)}
+              placeholder="Theme, special instructions, dietary notes, etc."
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* Search */}
+      <section className="search-section">
+        <div className="field" style={{ maxWidth: '100%' }}>
+          <label htmlFor="search-input">Search dishes / guests</label>
+          <input
+            id="search-input"
+            className="search"
+            type="text"
+            placeholder="Search dishes or guests…"
+            value={query}
+            onChange={e=>setQuery(e.target.value)}
+          />
+        </div>
+      </section>
 
       {/* Stats by Category */}
       <section className="card">
@@ -286,7 +359,7 @@ export default function App(){
             <div className="cat-checks">
               {CATEGORIES.map(c => (
                 <label key={c} className="cat-check">
-                  <input type="checkbox" checked={cats.includes(c)} onChange={()=>setCats(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])} /> {c}
+                  <input type="checkbox" checked={cats.includes(c)} onChange={()=>toggleCat(c)} /> {title(c)}
                 </label>
               ))}
             </div>
@@ -303,12 +376,16 @@ export default function App(){
           </div>
           <div className="field" style={{flex:1}}>
             <label>Notes (optional)</label>
-            <input value={notes} onChange={e=>setNotes(e.target.value)} type="text" placeholder="e.g., For Kiri only, vegan, has plutonium."/>
+            <input
+              value={notes}
+              onChange={e=>setNotes(e.target.value)}
+              type="text"
+              placeholder="e.g., For Kiri only, vegan, has plutonium."
+            />
           </div>
-          <div style={{display:'flex', gap:8, alignItems:'end'}}>
-            <input className="search" type="text" placeholder="Search name, dish, type, RSVP…" value={query} onChange={e=>setQuery(e.target.value)} />
-            <button onClick={addGuest} className="primary">Add</button>
-          </div>
+        </div>
+        <div style={{display:'flex', justifyContent:'flex-end', marginTop:10}}>
+          <button onClick={addGuest} className="primary">Add</button>
         </div>
       </section>
 
@@ -317,35 +394,41 @@ export default function App(){
         <div className="list">
           {isLoading && <div className="empty">Loading…</div>}
           {!isLoading && filtered.length === 0 && <div className="empty">No guests yet. Add someone above!</div>}
-          {filtered.map(g => (
-            <div key={g.id} className="item">
-              <div className="left" style={{gap:6}}>
-                {(g.categories||[]).map(c => <span key={c} className="badge">{c}</span>)}
-                <div>
-                  <div className="name">✨ {g.name} <span className="sub">({(g.rsvp||'').toUpperCase()})</span></div>
-                  <div className="sub">{g.dish}{g.notes ? ` · ${g.notes}` : ''}</div>
+          {!isLoading && filtered.map(g=>(
+            <div key={g.id} className="list-row">
+              <div className="list-main">
+                <div className="list-name">{g.name}</div>
+                <div className="muted">{g.dish}</div>
+                <div className="muted" style={{fontSize:12}}>
+                  {g.categories && g.categories.length > 0 && (
+                    <>
+                      {g.categories.map(c => title(c)).join(', ')}
+                      {' · '}
+                    </>
+                  )}
+                  RSVP: {g.rsvp}
+                  {g.notes ? ` · ${g.notes}` : ''}
                 </div>
               </div>
-              <div className="actions">
+              <div className="list-actions">
                 <button className="secondary" onClick={()=>{ setEdit({...g}); setEditOpen(true) }}>Edit</button>
-                <button className="danger" onClick={()=>removeGuest(g.id)}>Delete</button>
+                <button className="ghost" onClick={()=>removeGuest(g.id)}>Remove</button>
               </div>
             </div>
           ))}
         </div>
       </section>
 
-      {/* Edit modal */}
-      {editOpen && (
-        <div className="modal-backdrop" onClick={(e)=>{ if(e.target===e.currentTarget) setEditOpen(false) }}>
+      {editOpen && edit && (
+        <div className="modal-backdrop" onClick={()=>setEditOpen(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div className="modal-header">Edit Guest</div>
             <div className="row">
-              <div className="field">
+              <div className="field" style={{flex:1}}>
                 <label>Name</label>
                 <input value={edit?.name||''} onChange={e=>setEdit(prev => ({...prev, name:e.target.value}))} type="text"/>
               </div>
-              <div className="field">
+              <div className="field" style={{flex:1}}>
                 <label>Dish</label>
                 <input value={edit?.dish||''} onChange={e=>setEdit(prev => ({...prev, dish:e.target.value}))} type="text"/>
               </div>
@@ -354,21 +437,28 @@ export default function App(){
               <div className="field" style={{flex:'1 1 100%'}}>
                 <label>Dish Types</label>
                 <div className="cat-checks">
-                  {CATEGORIES.map(c => (
-                    <label key={c} className="cat-check">
-                      <input
-                        type="checkbox"
-                        checked={(edit?.categories||[]).includes(c)}
-                        onChange={()=> setEdit(prev => {
-                          const has = (prev.categories||[]).includes(c)
-                          const nextCats = has ? prev.categories.filter(x=>x!==c) : [...(prev.categories||[]), c]
-                          return { ...prev, categories: nextCats }
-                        })}
-                      /> {c}
-                    </label>
-                  ))}
+                  {CATEGORIES.map(c => {
+                    const has = (edit?.categories||[]).includes(c)
+                    return (
+                      <label key={c} className="cat-check">
+                        <input
+                          type="checkbox"
+                          checked={has}
+                          onChange={e=>{
+                            setEdit(prev => {
+                              const has = (prev.categories||[]).includes(c)
+                              const nextCats = has ? prev.categories.filter(x=>x!==c) : [...(prev.categories||[]), c]
+                              return { ...prev, categories: nextCats }
+                            })
+                          }}
+                        /> {title(c)}
+                      </label>
+                    )
+                  })}
                 </div>
               </div>
+            </div>
+            <div className="row" style={{marginTop:10}}>
               <div className="field" style={{maxWidth:180}}>
                 <label>RSVP</label>
                 <select value={edit?.rsvp||'yes'} onChange={e=>setEdit(prev => ({...prev, rsvp:e.target.value}))}>
@@ -377,8 +467,6 @@ export default function App(){
                   <option>no</option>
                 </select>
               </div>
-            </div>
-            <div className="row" style={{marginTop:10}}>
               <div className="field" style={{flex:1}}>
                 <label>Notes</label>
                 <input value={edit?.notes||''} onChange={e=>setEdit(prev => ({...prev, notes:e.target.value}))} type="text"/>
