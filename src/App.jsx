@@ -32,7 +32,6 @@ function Panda({ headerRef, anchorRef }){
       const now = performance.now()
       const dt = Math.min(32, now - lastMouseRef.current)
       const stiffness = 0.0028
-      const damping = 0.16
       const { x:tx, y:ty } = targetRef.current
       let { x:px, y:py } = posRef.current
       const vx = (tx - px) * stiffness * dt
@@ -79,31 +78,37 @@ function Panda({ headerRef, anchorRef }){
 }
 
 export default function App(){
-  // Shared state via Supabase (polling fallback)
+  // Guests state
   const [guests, setGuests] = React.useState([])
   const [isLoading, setIsLoading] = React.useState(true)
 
-  // Form state
+  // Add-entry form state
   const [name, setName] = React.useState('')
   const [dish, setDish] = React.useState('')
   const [notes, setNotes] = React.useState('')
   const [rsvp, setRsvp] = React.useState('yes')
-  const [query, setQuery] = React.useState('')
   const [cats, setCats] = React.useState([])
+  const [query, setQuery] = React.useState('')
+  const [addError, setAddError] = React.useState('')
 
-  // Party details (host-facing only)
-  const [partyName, setPartyName] = React.useState('Dara & Friends Potluck')
-  const [partyDateTime, setPartyDateTime] = React.useState('Saturday • 6:00 PM')
-  const [partyLocation, setPartyLocation] = React.useState('Our place')
-  const [partyNotes, setPartyNotes] = React.useState('Theme: cozy dishes, please label allergens if possible.')
+  // Party details (persisted via Supabase)
+  const [partyId, setPartyId] = React.useState(null)
+  const [partyName, setPartyName] = React.useState('')
+  const [partyDateTime, setPartyDateTime] = React.useState('')
+  const [partyLocation, setPartyLocation] = React.useState('')
+  const [partyNotes, setPartyNotes] = React.useState('')
+  const [isLoadingDetails, setIsLoadingDetails] = React.useState(true)
+  const [isSavingDetails, setIsSavingDetails] = React.useState(false)
+  const [isEditingDetails, setIsEditingDetails] = React.useState(false)
 
-  // Edit state
+  // Edit guest modal
   const [edit, setEdit] = React.useState(null)
   const [editOpen, setEditOpen] = React.useState(false)
 
   const headerRef = React.useRef(null)
   const sparkleRef = React.useRef(null)
 
+  // ---- Load guests (polling) ----
   const loadGuests = React.useCallback(async () => {
     const { data, error } = await supabase
       .from('guests')
@@ -118,11 +123,39 @@ export default function App(){
       await loadGuests()
       if (alive) setIsLoading(false)
     })()
-    const id = setInterval(loadGuests, 5000) // 5s polling
+    const id = setInterval(loadGuests, 5000)
     return () => { alive = false; clearInterval(id) }
   }, [loadGuests])
 
-  const nameTaken = React.useMemo(()=> new Set(guests.map(g=> (g.name||'').trim().toLowerCase())), [guests])
+  // ---- Load party details once ----
+  React.useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setIsLoadingDetails(true)
+      const { data, error } = await supabase
+        .from('party_details')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!alive) return
+      if (!error && data) {
+        setPartyId(data.id)
+        setPartyName(data.name || '')
+        setPartyDateTime(data.date_time || '')
+        setPartyLocation(data.location || '')
+        setPartyNotes(data.notes || '')
+      }
+      setIsLoadingDetails(false)
+    })()
+    return () => { alive = false }
+  }, [])
+
+  const nameTaken = React.useMemo(
+    () => new Set(guests.map(g => (g.name || '').trim().toLowerCase())),
+    [guests]
+  )
 
   const rsvpCounts = React.useMemo(()=>{
     const m = { yes:0, maybe:0, no:0 }
@@ -159,25 +192,90 @@ export default function App(){
     setCats(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])
   }
 
+  // ---- Google Calendar URL (template) ----
+  const googleCalendarUrl = React.useMemo(() => {
+    const base = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
+    const text = partyName || 'Potluck'
+    const detailsParts = []
+
+    if (partyNotes) detailsParts.push(partyNotes)
+    if (partyDateTime) detailsParts.push(`When: ${partyDateTime}`)
+    if (partyLocation) detailsParts.push(`Where: ${partyLocation}`)
+
+    const params = new URLSearchParams()
+    params.set('text', text)
+    if (detailsParts.length) params.set('details', detailsParts.join('\n'))
+    if (partyLocation) params.set('location', partyLocation)
+
+    return `${base}&${params.toString()}`
+  }, [partyName, partyDateTime, partyLocation, partyNotes])
+
+  // ---- Save party details ----
+  async function savePartyDetails(){
+    const payload = {
+      name: partyName || null,
+      date_time: partyDateTime || null,
+      location: partyLocation || null,
+      notes: partyNotes || null,
+    }
+
+    setIsSavingDetails(true)
+    try {
+      if (partyId) {
+        const { error } = await supabase
+          .from('party_details')
+          .update(payload)
+          .eq('id', partyId)
+        if (error) {
+          console.error(error)
+          alert('Could not save party details.')
+          return
+        }
+      } else {
+        const { data, error } = await supabase
+          .from('party_details')
+          .insert(payload)
+          .select()
+          .single()
+        if (error) {
+          console.error(error)
+          alert('Could not save party details.')
+          return
+        } else if (data) {
+          setPartyId(data.id)
+        }
+      }
+      setIsEditingDetails(false)
+    } finally {
+      setIsSavingDetails(false)
+    }
+  }
+
+  // ---- Add / edit / delete guest ----
   async function addGuest(){
-    const n = name.trim(), d = dish.trim()
-    if(!n || !d){
-      alert('Please enter a name and dish.')
+    setAddError('')
+
+    const n = name.trim()
+    const d = dish.trim()
+
+    // Only Name is required
+    if(!n){
+      setAddError('Please enter a name.')
       return
     }
+
     if(nameTaken.has(n.toLowerCase())){
       if(!confirm('Someone with that name is already in the list. Add anyway?')) return
     }
 
     const newRow = {
       name: n,
-      dish: d,
-      categories: cats,
+      dish: d || null,               // optional
+      categories: cats,              // optional
       rsvp,
-      notes: notes.trim() || null
+      notes: notes.trim() || null    // optional
     }
 
-    // optimistic insert
     const tempId = `temp-${Math.random().toString(36).slice(2,10)}`
     setGuests(prev => [...prev, { id: tempId, ...newRow, created_at: new Date().toISOString() }])
     setName('')
@@ -189,27 +287,23 @@ export default function App(){
 
     const { error, data } = await supabase.from('guests').insert(newRow).select().single()
     if(error){
-      alert('Could not save guest. Reverting.')
+      alert('Could not save entry. Reverting.')
       await loadGuests()
     }else{
-      // swap temp id with real id
       setGuests(prev => prev.map(g => g.id === tempId ? data : g))
     }
   }
-
-  function startEdit(g){ setEdit({...g}); setEditOpen(true) }
 
   async function saveEdit(){
     if(!edit) return
     const payload = {
       name: edit.name.trim(),
-      dish: edit.dish.trim(),
+      dish: (edit.dish || '').trim() || null,
       categories: edit.categories || [],
       rsvp: edit.rsvp,
-      notes: edit.notes || null
+      notes: (edit.notes || '').trim() || null
     }
 
-    // optimistic UI
     setGuests(prev => prev.map(g => g.id === edit.id ? { ...g, ...payload } : g))
     setEditOpen(false); setEdit(null)
 
@@ -236,21 +330,29 @@ export default function App(){
 
   return (
     <div className="container">
+      {/* HEADER SUMMARY */}
       <header ref={headerRef} className="header card header-bounds" id="header">
         <div>
-          <h1>Potluck Planner <span ref={sparkleRef} className="sparkle">✨</span></h1>
-          <div className="muted">Let's have a party!</div>
+          <h1>
+            Potluck Planner <span ref={sparkleRef} className="sparkle">✨</span>
+          </h1>
         </div>
 
         <div style={{flex:1}} />
 
         <div style={{width:'460px', maxWidth:'100%'}}>
-          <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12, marginBottom:6}}>
-            <div style={{fontWeight:600}}>RSVP Summary</div>
+          <div className="header-summary-row">
+            <div className="header-summary-label">RSVP</div>
             <div className="legend">
-              <span className="chip" style={{background:'var(--green-100)', color:'var(--green-700)'}}><span className="dot" style={{background:'var(--green)'}}></span> Yes {rsvpCounts.yes}</span>
-              <span className="chip" style={{background:'var(--yellow-100)', color:'var(--yellow-700)'}}><span className="dot" style={{background:'var(--yellow)'}}></span> Maybe {rsvpCounts.maybe}</span>
-              <span className="chip" style={{background:'var(--red-100)', color:'var(--red-700)'}}><span className="dot" style={{background:'var(--red)'}}></span> No {rsvpCounts.no}</span>
+              <span className="chip" style={{background:'var(--green-100)', color:'var(--green-700)'}}>
+                <span className="dot" style={{background:'var(--green)'}}></span> Yes {rsvpCounts.yes}
+              </span>
+              <span className="chip" style={{background:'var(--yellow-100)', color:'var(--yellow-700)'}}>
+                <span className="dot" style={{background:'var(--yellow)'}}></span> Maybe {rsvpCounts.maybe}
+              </span>
+              <span className="chip" style={{background:'var(--red-100)', color:'var(--red-700)'}}>
+                <span className="dot" style={{background:'var(--red)'}}></span> No {rsvpCounts.no}
+              </span>
             </div>
           </div>
           <div className="rsvp-bar">
@@ -258,82 +360,121 @@ export default function App(){
             <div style={{background:'var(--yellow)', width:`${maybePct}%`}} />
             <div style={{background:'var(--red)', width:`${noPct}%`}} />
           </div>
-          <div className="footer-right" style={{marginTop:6}}>
-            <span className="total-badge">Total: {totalGuests}</span>
+          {/* Clarified summary label */}
+          <div className="header-items-summary">
+            <span className="items-badge">{totalGuests} guests responded</span>
           </div>
         </div>
 
         <Panda headerRef={headerRef} anchorRef={sparkleRef} />
       </header>
 
-      {/* Party Details */}
+      {/* PARTY DETAILS */}
       <section className="card party-details">
         <div className="party-details-header">
-          <h2 className="party-details-title">🎉 Party Details</h2>
-          <div className="party-details-sub muted">Quick host view</div>
-        </div>
-        <div className="party-details-grid">
-          <div className="field">
-            <label>Party Name</label>
-            <input
-              type="text"
-              value={partyName}
-              onChange={e=>setPartyName(e.target.value)}
-              placeholder="Friendsgiving Potluck"
-            />
+          <div>
+            <a
+              href={googleCalendarUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="calendar-link"
+            >
+              Add to Google Calendar
+            </a>
+            {isLoadingDetails && (
+              <div className="party-details-sub muted">Loading details…</div>
+            )}
           </div>
-          <div className="field">
-            <label>Date &amp; Time</label>
-            <input
-              type="text"
-              value={partyDateTime}
-              onChange={e=>setPartyDateTime(e.target.value)}
-              placeholder="Sat • 6:00 PM"
-            />
-          </div>
-          <div className="field">
-            <label>Location / Address</label>
-            <input
-              type="text"
-              value={partyLocation}
-              onChange={e=>setPartyLocation(e.target.value)}
-              placeholder="123 Party St, Seattle"
-            />
-          </div>
-          <div className="field">
-            <label>Notes / Theme</label>
-            <input
-              type="text"
-              value={partyNotes}
-              onChange={e=>setPartyNotes(e.target.value)}
-              placeholder="Theme, special instructions, dietary notes, etc."
-            />
+          <div className="party-details-actions">
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => setIsEditingDetails(prev => !prev)}
+              disabled={isSavingDetails || isLoadingDetails}
+            >
+              {isEditingDetails ? 'Cancel' : 'Edit'}
+            </button>
+            <button
+              className="primary"
+              type="button"
+              onClick={savePartyDetails}
+              disabled={isSavingDetails || !isEditingDetails}
+            >
+              {isSavingDetails ? 'Saving…' : 'Save'}
+            </button>
           </div>
         </div>
+
+        {/* VIEW MODE – compact summary */}
+        {!isEditingDetails && (
+          <div className="party-details-body">
+            <div className="party-main-line">
+              {partyName || <span className="party-placeholder">No party name yet</span>}
+            </div>
+            <div className="party-meta">
+              {partyDateTime || <span className="party-placeholder">No date/time set</span>}
+              {(partyDateTime || partyLocation) && ' · '}
+              {partyLocation || <span className="party-placeholder">No location added</span>}
+            </div>
+            {partyNotes && (
+              <div className="party-notes">
+                {partyNotes}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* EDIT MODE – labeled fields, no placeholders inside inputs */}
+        {isEditingDetails && (
+          <div className="party-edit-grid">
+            <div className="field">
+              <label>Party Name</label>
+              <input
+                type="text"
+                value={partyName}
+                onChange={e=>setPartyName(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label>Date/Time</label>
+              <input
+                type="text"
+                value={partyDateTime}
+                onChange={e=>setPartyDateTime(e.target.value)}
+              />
+            </div>
+
+            {/* Location: its own full-width line */}
+            <div className="field party-location-field">
+              <label>Location</label>
+              <input
+                type="text"
+                value={partyLocation}
+                onChange={e=>setPartyLocation(e.target.value)}
+              />
+            </div>
+
+            <div className="field party-notes-field">
+              <label>Notes</label>
+              <textarea
+                value={partyNotes}
+                onChange={e=>setPartyNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
+          </div>
+        )}
       </section>
 
-      {/* Search */}
-      <section className="search-section">
-        <div className="field" style={{ maxWidth: '100%' }}>
-          <label htmlFor="search-input">Search dishes / guests</label>
-          <input
-            id="search-input"
-            className="search"
-            type="text"
-            placeholder="Search dishes or guests…"
-            value={query}
-            onChange={e=>setQuery(e.target.value)}
-          />
-        </div>
-      </section>
-
-      {/* Stats by Category */}
+      {/* STATS BY CATEGORY */}
       <section className="card">
         <div className="grid grid-6">
           {CATEGORIES.map(c => (
-            <div key={c} className="card" style={{background:'rgba(255,255,255,.6)'}}>
+            <div key={c} className="card mini-card">
               <div style={{textAlign:'center'}}>
-                <div className="muted" style={{textTransform:'uppercase', fontSize:11}}>{title(c)}</div>
+                <div className="muted" style={{textTransform:'uppercase', fontSize:11}}>
+                  {title(c)}
+                </div>
                 <div style={{fontSize:20, fontWeight:700}}>{catCounts[c]}</div>
               </div>
             </div>
@@ -341,30 +482,49 @@ export default function App(){
         </div>
       </section>
 
-      {/* Add Form */}
+      {/* ADD FORM */}
       <section className="card">
+        <div className="section-header-row">
+          <h2 className="section-title">Sign up</h2>
+          {addError && <div className="error-text">{addError}</div>}
+        </div>
+
         <div className="row">
           <div className="field">
-            <label>Name</label>
-            <input value={name} onChange={e=>setName(e.target.value)} type="text" placeholder="e.g., Dara"/>
+            <label>Name (required)</label>
+            <input
+              value={name}
+              onChange={e=>setName(e.target.value)}
+              type="text"
+            />
           </div>
           <div className="field" style={{flex:1.4}}>
             <label>Dish</label>
-            <input value={dish} onChange={e=>setDish(e.target.value)} type="text" placeholder="e.g., Strawberry mochi"/>
+            <input
+              value={dish}
+              onChange={e=>setDish(e.target.value)}
+              type="text"
+            />
           </div>
         </div>
+
         <div className="row" style={{marginTop:10}}>
           <div className="field" style={{flex:'1 1 100%'}}>
-            <label>Dish Types (choose multiple)</label>
+            <label>Dish Type (optional)</label>
             <div className="cat-checks">
               {CATEGORIES.map(c => (
                 <label key={c} className="cat-check">
-                  <input type="checkbox" checked={cats.includes(c)} onChange={()=>toggleCat(c)} /> {title(c)}
+                  <input
+                    type="checkbox"
+                    checked={cats.includes(c)}
+                    onChange={()=>toggleCat(c)}
+                  /> {title(c)}
                 </label>
               ))}
             </div>
           </div>
         </div>
+
         <div className="row" style={{marginTop:10}}>
           <div className="field" style={{maxWidth:180}}>
             <label>RSVP</label>
@@ -380,25 +540,43 @@ export default function App(){
               value={notes}
               onChange={e=>setNotes(e.target.value)}
               type="text"
-              placeholder="e.g., For Kiri only, vegan, has plutonium."
             />
           </div>
         </div>
+
         <div style={{display:'flex', justifyContent:'flex-end', marginTop:10}}>
           <button onClick={addGuest} className="primary">Add</button>
         </div>
       </section>
 
-      {/* List */}
+      {/* SEARCH – under form, above list */}
+      <section className="search-section card">
+        <div className="field" style={{ maxWidth: '100%' }}>
+          <label htmlFor="search-input">Search entries</label>
+          <input
+            id="search-input"
+            className="search"
+            type="text"
+            value={query}
+            onChange={e=>setQuery(e.target.value)}
+          />
+        </div>
+      </section>
+
+      {/* LIST */}
       <section className="card">
         <div className="list">
           {isLoading && <div className="empty">Loading…</div>}
-          {!isLoading && filtered.length === 0 && <div className="empty">No guests yet. Add someone above!</div>}
+          {!isLoading && filtered.length === 0 && (
+            <div className="empty">
+              Nothing here yet. Sign up above ✨
+            </div>
+          )}
           {!isLoading && filtered.map(g=>(
             <div key={g.id} className="list-row">
               <div className="list-main">
                 <div className="list-name">{g.name}</div>
-                <div className="muted">{g.dish}</div>
+                {g.dish && <div className="muted">{g.dish}</div>}
                 <div className="muted" style={{fontSize:12}}>
                   {g.categories && g.categories.length > 0 && (
                     <>
@@ -411,7 +589,12 @@ export default function App(){
                 </div>
               </div>
               <div className="list-actions">
-                <button className="secondary" onClick={()=>{ setEdit({...g}); setEditOpen(true) }}>Edit</button>
+                <button
+                  className="secondary"
+                  onClick={()=>{ setEdit({...g}); setEditOpen(true) }}
+                >
+                  Edit
+                </button>
                 <button className="ghost" onClick={()=>removeGuest(g.id)}>Remove</button>
               </div>
             </div>
@@ -422,20 +605,28 @@ export default function App(){
       {editOpen && edit && (
         <div className="modal-backdrop" onClick={()=>setEditOpen(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
-            <div className="modal-header">Edit Guest</div>
+            <div className="modal-header">Edit Entry</div>
             <div className="row">
               <div className="field" style={{flex:1}}>
                 <label>Name</label>
-                <input value={edit?.name||''} onChange={e=>setEdit(prev => ({...prev, name:e.target.value}))} type="text"/>
+                <input
+                  value={edit?.name||''}
+                  onChange={e=>setEdit(prev => ({...prev, name:e.target.value}))}
+                  type="text"
+                />
               </div>
               <div className="field" style={{flex:1}}>
                 <label>Dish</label>
-                <input value={edit?.dish||''} onChange={e=>setEdit(prev => ({...prev, dish:e.target.value}))} type="text"/>
+                <input
+                  value={edit?.dish||''}
+                  onChange={e=>setEdit(prev => ({...prev, dish:e.target.value}))}
+                  type="text"
+                />
               </div>
             </div>
             <div className="row" style={{marginTop:10}}>
               <div className="field" style={{flex:'1 1 100%'}}>
-                <label>Dish Types</label>
+                <label>Dish Type</label>
                 <div className="cat-checks">
                   {CATEGORIES.map(c => {
                     const has = (edit?.categories||[]).includes(c)
@@ -444,10 +635,12 @@ export default function App(){
                         <input
                           type="checkbox"
                           checked={has}
-                          onChange={e=>{
+                          onChange={()=>{
                             setEdit(prev => {
-                              const has = (prev.categories||[]).includes(c)
-                              const nextCats = has ? prev.categories.filter(x=>x!==c) : [...(prev.categories||[]), c]
+                              const hasCurrent = (prev.categories||[]).includes(c)
+                              const nextCats = hasCurrent
+                                ? prev.categories.filter(x=>x!==c)
+                                : [...(prev.categories||[]), c]
                               return { ...prev, categories: nextCats }
                             })
                           }}
@@ -461,7 +654,10 @@ export default function App(){
             <div className="row" style={{marginTop:10}}>
               <div className="field" style={{maxWidth:180}}>
                 <label>RSVP</label>
-                <select value={edit?.rsvp||'yes'} onChange={e=>setEdit(prev => ({...prev, rsvp:e.target.value}))}>
+                <select
+                  value={edit?.rsvp||'yes'}
+                  onChange={e=>setEdit(prev => ({...prev, rsvp:e.target.value}))}
+                >
                   <option>yes</option>
                   <option>maybe</option>
                   <option>no</option>
@@ -469,7 +665,11 @@ export default function App(){
               </div>
               <div className="field" style={{flex:1}}>
                 <label>Notes</label>
-                <input value={edit?.notes||''} onChange={e=>setEdit(prev => ({...prev, notes:e.target.value}))} type="text"/>
+                <input
+                  value={edit?.notes||''}
+                  onChange={e=>setEdit(prev => ({...prev, notes:e.target.value}))}
+                  type="text"
+                />
               </div>
             </div>
             <div className="modal-actions">
