@@ -647,7 +647,7 @@ export default function App(){
       <section className="card dishes-card">
         <div className="section-header-row">
           <h2 className="section-title">Dishes</h2>
-          <div className="muted" style={{fontSize:12}}>Quick view of what’s on the table</div>
+          <div className="muted" style={{fontSize:12}}></div>
         </div>
         <div className="grid grid-6 dishes-grid">
           {CATEGORIES.map(c => {
