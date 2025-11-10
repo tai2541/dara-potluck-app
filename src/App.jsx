@@ -7,89 +7,106 @@ function title(s){ return s.replace(/\b\w/g, m=>m.toUpperCase()) }
 
 function Panda({ headerRef, anchorRef }){
   const elRef = React.useRef(null)
-  const posRef = React.useRef({ x: 120, y: 60 })
-  const targetRef = React.useRef({ x: 120, y: 60 })
-  const lastMouseRef = React.useRef(performance.now())
+  const posRef = React.useRef({ x: 0, y: 0 })
+  const targetRef = React.useRef({ x: 0, y: 0 })
 
-  React.useEffect(()=>{
+  // Initial placement + smooth follow loop
+  React.useEffect(() => {
     const header = headerRef.current
     const anchor = anchorRef.current
     const el = elRef.current
-    if(!header || !anchor || !el) return
+    if (!header || !anchor || !el) return
 
     const hb = header.getBoundingClientRect()
     const ab = anchor.getBoundingClientRect()
+
     const initial = {
-      x: ab.left - hb.left + ab.width/2,
-      y: ab.top - hb.top + ab.height/2
+      x: ab.left - hb.left + ab.width / 2,
+      y: ab.top - hb.top + ab.height / 2,
     }
+
     posRef.current = initial
     targetRef.current = initial
     el.style.transform = `translate(${initial.x}px,${initial.y}px)`
 
     let raf
     function step(){
-      const now = performance.now()
-      const dt = Math.min(32, now - lastMouseRef.current)
-      const stiffness = 0.0028
-      const { x:tx, y:ty } = targetRef.current
-      let { x:px, y:py } = posRef.current
-      const vx = (tx - px) * stiffness * dt
-      const vy = (ty - py) * stiffness * dt
-      px += vx
-      py += vy
-      px += (Math.random()-0.5) * 0.04 * dt
-      py += (Math.random()-0.5) * 0.04 * dt
-      posRef.current = { x:px, y:py }
-      el.style.transform = `translate(${px}px,${py}px)`
+      const { x, y } = posRef.current
+      const { x: tx, y: ty } = targetRef.current
+      const spring = 0.12
+
+      const nx = x + (tx - x) * spring
+      const ny = y + (ty - y) * spring
+
+      posRef.current = { x: nx, y: ny }
+      el.style.transform = `translate(${nx}px,${ny}px)`
       raf = requestAnimationFrame(step)
     }
+
     raf = requestAnimationFrame(step)
-    return ()=> cancelAnimationFrame(raf)
-  }, [headerRef])
+    return () => cancelAnimationFrame(raf)
+  }, [headerRef, anchorRef])
 
-  React.useEffect(()=>{
+  // Run away from the mouse when it's too close
+  React.useEffect(() => {
     const header = headerRef.current
-    if(!header) return
-    const hb = header.getBoundingClientRect()
+    if (!header) return
 
-    function clamp(v,min,max){ return Math.max(min, Math.min(max,v)) }
+    function clamp(v, min, max){ return Math.max(min, Math.min(max, v)) }
 
     function onMove(e){
+      const hb = header.getBoundingClientRect()
       const mx = e.clientX - hb.left
       const my = e.clientY - hb.top
-      const { x:px, y:py } = posRef.current
-      const dx = px - mx, dy = py - my
-      const dist = Math.hypot(dx,dy) || 1
-      const threshold = 110
-      if(dist < threshold){
-        const away = Math.min(70, (threshold - dist) * 0.85)
-        let nx = px + (dx/dist)*away
-        let ny = py + (dy/dist)*away
-        targetRef.current = { x: clamp(nx,24,hb.width-24), y: clamp(ny,24,hb.height-24) }
+
+      const { x: px, y: py } = posRef.current
+      const dx = px - mx
+      const dy = py - my
+      const dist = Math.hypot(dx, dy) || 1
+
+      const threshold = 90
+      if (dist < threshold){
+        const away = threshold - dist + 40
+        let nx = px + (dx / dist) * away
+        let ny = py + (dy / dist) * away
+
+        nx = clamp(nx, 24, hb.width - 24)
+        ny = clamp(ny, 24, hb.height - 24)
+
+        targetRef.current = { x: nx, y: ny }
       }
-      lastMouseRef.current = performance.now()
     }
+
     window.addEventListener('mousemove', onMove)
-    return ()=> window.removeEventListener('mousemove', onMove)
+    return () => window.removeEventListener('mousemove', onMove)
   }, [headerRef])
 
-  return <div ref={elRef} className="panda"><span className="panda-emoji">🐼</span></div>
+  return (
+    <div ref={elRef} className="panda">
+      <span className="panda-emoji">🐼</span>
+    </div>
+  )
 }
 
 export default function App(){
-  // Guests state
+  // Guests (RSVP rows)
   const [guests, setGuests] = React.useState([])
   const [isLoading, setIsLoading] = React.useState(true)
 
+  // Dishes (child rows per guest)
+  const [dishes, setDishes] = React.useState([])
+
   // Add-entry form state
   const [name, setName] = React.useState('')
-  const [dish, setDish] = React.useState('')
   const [notes, setNotes] = React.useState('')
   const [rsvp, setRsvp] = React.useState('yes')
-  const [cats, setCats] = React.useState([])
   const [query, setQuery] = React.useState('')
   const [addError, setAddError] = React.useState('')
+
+  // Multi-dish input for sign-up
+  const [newDishes, setNewDishes] = React.useState([
+    { name: '', category: 'main' }
+  ])
 
   // Party details (persisted via Supabase)
   const [partyId, setPartyId] = React.useState(null)
@@ -104,11 +121,12 @@ export default function App(){
   // Edit guest modal
   const [edit, setEdit] = React.useState(null)
   const [editOpen, setEditOpen] = React.useState(false)
+  const [editDishes, setEditDishes] = React.useState([])
 
   const headerRef = React.useRef(null)
   const sparkleRef = React.useRef(null)
 
-  // ---- Load guests (polling) ----
+  // ---- Load guests ----
   const loadGuests = React.useCallback(async () => {
     const { data, error } = await supabase
       .from('guests')
@@ -117,15 +135,27 @@ export default function App(){
     if (!error) setGuests(data || [])
   }, [])
 
+  // ---- Load dishes ----
+  const loadDishes = React.useCallback(async () => {
+    const { data, error } = await supabase
+      .from('dishes')
+      .select('*')
+      .order('created_at', { ascending: true })
+    if (!error) setDishes(data || [])
+  }, [])
+
   React.useEffect(() => {
     let alive = true
     ;(async () => {
-      await loadGuests()
+      await Promise.all([loadGuests(), loadDishes()])
       if (alive) setIsLoading(false)
     })()
-    const id = setInterval(loadGuests, 5000)
+    const id = setInterval(() => {
+      loadGuests()
+      loadDishes()
+    }, 5000)
     return () => { alive = false; clearInterval(id) }
-  }, [loadGuests])
+  }, [loadGuests, loadDishes])
 
   // ---- Load party details once ----
   React.useEffect(() => {
@@ -165,31 +195,76 @@ export default function App(){
 
   const catCounts = React.useMemo(()=>{
     const m = { starter:0, main:0, side:0, dessert:0, drink:0, other:0 }
-    guests.forEach(g => (g.categories||[]).forEach(c => m[c] = (m[c]||0)+1))
+    dishes.forEach(d => { m[d.category] = (m[d.category]||0)+1 })
     return m
-  }, [guests])
+  }, [dishes])
 
-  const totalGuests = guests.length
-  const yesPct = totalGuests ? Math.round((rsvpCounts.yes/totalGuests)*100) : 0
-  const noPct = totalGuests ? Math.round((rsvpCounts.no/totalGuests)*100) : 0
-  const maybePct = totalGuests ? 100 - yesPct - noPct : 0
+  // Dishes grouped by category for the "Dishes" section
+  const dishesByCategory = React.useMemo(() => {
+    const map = {}
+    CATEGORIES.forEach(c => { map[c] = [] })
+    dishes.forEach(d => {
+      if (!map[d.category]) map[d.category] = []
+      map[d.category].push(d)
+    })
+    return map
+  }, [dishes])
+
+  // Dishes grouped by guest for list & edit
+  const dishesByGuestId = React.useMemo(() => {
+    const map = {}
+    dishes.forEach(d => {
+      if (!map[d.guest_id]) map[d.guest_id] = []
+      map[d.guest_id].push(d)
+    })
+    return map
+  }, [dishes])
+
+  // Total *entries* (rows) – used for RSVP percentages
+  const totalEntries = guests.length
+
+  const yesPct = totalEntries ? Math.round((rsvpCounts.yes/totalEntries)*100) : 0
+  const noPct = totalEntries ? Math.round((rsvpCounts.no/totalEntries)*100) : 0
+  const maybePct = totalEntries ? 100 - yesPct - noPct : 0
+
+  // Distinct guests by name – used for "# guests responded"
+  const distinctGuests = React.useMemo(() => {
+    const set = new Set(
+      guests
+        .map(g => (g.name || '').trim().toLowerCase())
+        .filter(Boolean)
+    )
+    return set.size
+  }, [guests])
 
   const filtered = React.useMemo(()=>{
     const q = query.trim().toLowerCase()
     const base = guests.slice().sort((a,b)=> (a.name||'').localeCompare(b.name||''))
     if(!q) return base
     return base.filter(g => {
-      const catsStr = (g.categories||[]).join(' ')
+      const guestDishes = dishesByGuestId[g.id] || []
+      const dishesStr = guestDishes.map(d => `${d.name} ${d.category}`).join(' ')
       return (g.name||'').toLowerCase().includes(q)
-        || (g.dish||'').toLowerCase().includes(q)
-        || catsStr.toLowerCase().includes(q)
+        || dishesStr.toLowerCase().includes(q)
         || (g.rsvp||'').toLowerCase().includes(q)
         || (g.notes||'').toLowerCase().includes(q)
     })
-  }, [guests, query])
+  }, [guests, query, dishesByGuestId])
 
-  function toggleCat(c){
-    setCats(prev => prev.includes(c) ? prev.filter(x=>x!==c) : [...prev, c])
+  function updateNewDishName(index, value){
+    setNewDishes(prev => prev.map((d,i) => i === index ? { ...d, name:value } : d))
+  }
+
+  function updateNewDishCategory(index, value){
+    setNewDishes(prev => prev.map((d,i) => i === index ? { ...d, category:value } : d))
+  }
+
+  function addDishRow(){
+    setNewDishes(prev => [...prev, { name:'', category:'main' }])
+  }
+
+  function removeDishRow(index){
+    setNewDishes(prev => prev.length <= 1 ? prev : prev.filter((_,i) => i !== index))
   }
 
   // ---- Google Calendar URL (template) ----
@@ -256,9 +331,7 @@ export default function App(){
     setAddError('')
 
     const n = name.trim()
-    const d = dish.trim()
 
-    // Only Name is required
     if(!n){
       setAddError('Please enter a name.')
       return
@@ -268,63 +341,133 @@ export default function App(){
       if(!confirm('Someone with that name is already in the list. Add anyway?')) return
     }
 
-    const newRow = {
+    // Clean dishes
+    const cleanedDishes = newDishes
+      .map(d => ({
+        name: d.name.trim(),
+        category: d.category
+      }))
+      .filter(d => d.name)
+
+    const guestRow = {
       name: n,
-      dish: d || null,               // optional
-      categories: cats,              // optional
       rsvp,
-      notes: notes.trim() || null    // optional
+      notes: notes.trim() || null
     }
 
+    // Optimistic local add (guest only)
     const tempId = `temp-${Math.random().toString(36).slice(2,10)}`
-    setGuests(prev => [...prev, { id: tempId, ...newRow, created_at: new Date().toISOString() }])
+    setGuests(prev => [...prev, { id: tempId, ...guestRow, created_at: new Date().toISOString() }])
+
     setName('')
-    setDish('')
     setNotes('')
     setRsvp('yes')
-    setCats([])
+    setNewDishes([{ name:'', category:'main' }])
     setQuery('')
 
-    const { error, data } = await supabase.from('guests').insert(newRow).select().single()
-    if(error){
+    // Persist guest
+    const { error: guestError, data: guestData } = await supabase
+      .from('guests')
+      .insert(guestRow)
+      .select()
+      .single()
+
+    if(guestError || !guestData){
       alert('Could not save entry. Reverting.')
-      await loadGuests()
-    }else{
-      setGuests(prev => prev.map(g => g.id === tempId ? data : g))
+      await Promise.all([loadGuests(), loadDishes()])
+      return
     }
+
+    // Replace temp guest with real one
+    setGuests(prev => prev.map(g => g.id === tempId ? guestData : g))
+
+    // Persist dishes
+    if(cleanedDishes.length){
+      const dishRows = cleanedDishes.map(d => ({
+        guest_id: guestData.id,
+        name: d.name,
+        category: d.category
+      }))
+      const { error: dishError } = await supabase.from('dishes').insert(dishRows)
+      if(dishError){
+        console.error(dishError)
+        alert('Guest saved, but dishes could not be saved.')
+      }
+    }
+
+    await loadDishes()
   }
 
   async function saveEdit(){
     if(!edit) return
+
     const payload = {
       name: edit.name.trim(),
-      dish: (edit.dish || '').trim() || null,
-      categories: edit.categories || [],
       rsvp: edit.rsvp,
       notes: (edit.notes || '').trim() || null
     }
 
+    // Update guest locally
     setGuests(prev => prev.map(g => g.id === edit.id ? { ...g, ...payload } : g))
-    setEditOpen(false); setEdit(null)
 
-    const { error } = await supabase.from('guests').update(payload).eq('id', edit.id)
-    if(error){
+    // Clean edit dishes
+    const cleaned = (editDishes || [])
+      .map(d => ({
+        name: (d.name || '').trim(),
+        category: d.category || 'other'
+      }))
+      .filter(d => d.name)
+
+    // Persist guest
+    const { error: guestError } = await supabase
+      .from('guests')
+      .update(payload)
+      .eq('id', edit.id)
+
+    if(guestError){
       alert('Update failed. Reverting.')
-      loadGuests()
-    }else{
-      loadGuests()
+      await Promise.all([loadGuests(), loadDishes()])
+      setEditOpen(false); setEdit(null)
+      return
     }
+
+    // Replace dishes by deleting + reinserting
+    const { error: delError } = await supabase
+      .from('dishes')
+      .delete()
+      .eq('guest_id', edit.id)
+
+    if(delError){
+      console.error(delError)
+      alert('Could not update dishes.')
+    } else if(cleaned.length){
+      const rows = cleaned.map(d => ({
+        guest_id: edit.id,
+        name: d.name,
+        category: d.category
+      }))
+      const { error: insError } = await supabase
+        .from('dishes')
+        .insert(rows)
+      if(insError){
+        console.error(insError)
+        alert('Some dishes could not be saved.')
+      }
+    }
+
+    await Promise.all([loadGuests(), loadDishes()])
+    setEditOpen(false); setEdit(null); setEditDishes([])
   }
 
   async function removeGuest(id){
-    const prev = guests
+    const prevGuests = guests
     setGuests(prev => prev.filter(g => g.id !== id))
     const { error } = await supabase.from('guests').delete().eq('id', id)
     if(error){
       alert('Delete failed. Reverting.')
-      setGuests(prev)
+      setGuests(prevGuests)
     }else{
-      loadGuests()
+      await Promise.all([loadGuests(), loadDishes()])
     }
   }
 
@@ -360,9 +503,8 @@ export default function App(){
             <div style={{background:'var(--yellow)', width:`${maybePct}%`}} />
             <div style={{background:'var(--red)', width:`${noPct}%`}} />
           </div>
-          {/* Clarified summary label */}
           <div className="header-items-summary">
-            <span className="items-badge">{totalGuests} guests responded</span>
+            <span className="items-badge">{distinctGuests} guests responded</span>
           </div>
         </div>
 
@@ -405,7 +547,6 @@ export default function App(){
           </div>
         </div>
 
-        {/* VIEW MODE – compact summary */}
         {!isEditingDetails && (
           <div className="party-details-body">
             <div className="party-main-line">
@@ -424,7 +565,6 @@ export default function App(){
           </div>
         )}
 
-        {/* EDIT MODE – labeled fields, no placeholders inside inputs */}
         {isEditingDetails && (
           <div className="party-edit-grid">
             <div className="field">
@@ -444,7 +584,6 @@ export default function App(){
               />
             </div>
 
-            {/* Location: its own full-width line */}
             <div className="field party-location-field">
               <label>Location</label>
               <input
@@ -482,7 +621,42 @@ export default function App(){
         </div>
       </section>
 
-      {/* ADD FORM */}
+      {/* DISHES BY CATEGORY */}
+      <section className="card dishes-card">
+        <div className="section-header-row">
+          <h2 className="section-title">Dishes</h2>
+          <div className="muted" style={{fontSize:12}}>Quick view of what’s on the table</div>
+        </div>
+        <div className="grid grid-6 dishes-grid">
+          {CATEGORIES.map(c => {
+            const items = dishesByCategory[c] || []
+            return (
+              <div key={c} className="card mini-card dish-column">
+                <div className="dish-column-header">{title(c)}</div>
+                {items.length === 0 ? (
+                  <div className="dish-empty muted">Nothing yet</div>
+                ) : (
+                  <ul className="dish-list">
+                    {items.map((item, idx) => (
+                      <li key={item.id || idx}>
+                        <span className="dish-name">{item.name}</span>
+                        <span className="dish-guest">
+                          {' '}
+                          · {
+                            (guests.find(g => g.id === item.guest_id)?.name) || 'Someone'
+                          }
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      {/* SIGN UP FORM */}
       <section className="card">
         <div className="section-header-row">
           <h2 className="section-title">Sign up</h2>
@@ -498,34 +672,6 @@ export default function App(){
               type="text"
             />
           </div>
-          <div className="field" style={{flex:1.4}}>
-            <label>Dish</label>
-            <input
-              value={dish}
-              onChange={e=>setDish(e.target.value)}
-              type="text"
-            />
-          </div>
-        </div>
-
-        <div className="row" style={{marginTop:10}}>
-          <div className="field" style={{flex:'1 1 100%'}}>
-            <label>Dish Type (optional)</label>
-            <div className="cat-checks">
-              {CATEGORIES.map(c => (
-                <label key={c} className="cat-check">
-                  <input
-                    type="checkbox"
-                    checked={cats.includes(c)}
-                    onChange={()=>toggleCat(c)}
-                  /> {title(c)}
-                </label>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="row" style={{marginTop:10}}>
           <div className="field" style={{maxWidth:180}}>
             <label>RSVP</label>
             <select value={rsvp} onChange={e=>setRsvp(e.target.value)}>
@@ -534,7 +680,10 @@ export default function App(){
               <option>no</option>
             </select>
           </div>
-          <div className="field" style={{flex:1}}>
+        </div>
+
+        <div className="row" style={{marginTop:10}}>
+          <div className="field" style={{flex:'1 1 100%'}}>
             <label>Notes (optional)</label>
             <input
               value={notes}
@@ -544,7 +693,49 @@ export default function App(){
           </div>
         </div>
 
-        <div style={{display:'flex', justifyContent:'flex-end', marginTop:10}}>
+        <div style={{marginTop:12, marginBottom:4, fontSize:12, color:'var(--muted)'}}>
+          Dishes you&apos;re bringing (one dish per row)
+        </div>
+
+        {newDishes.map((d, index) => (
+          <div className="row" key={index}>
+            <div className="field" style={{flex:1.4}}>
+              <label>{newDishes.length > 1 ? `Dish #${index+1}` : 'Dish'}</label>
+              <input
+                type="text"
+                value={d.name}
+                onChange={e=>updateNewDishName(index, e.target.value)}
+              />
+            </div>
+            <div className="field" style={{maxWidth:180}}>
+              <label>Dish Type</label>
+              <select
+                value={d.category}
+                onChange={e=>updateNewDishCategory(index, e.target.value)}
+              >
+                {CATEGORIES.map(c => (
+                  <option key={c} value={c}>{title(c)}</option>
+                ))}
+              </select>
+            </div>
+            {newDishes.length > 1 && (
+              <div style={{display:'flex', alignItems:'flex-end'}}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={()=>removeDishRow(index)}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+
+        <div style={{display:'flex', justifyContent:'space-between', marginTop:10}}>
+          <button type="button" className="secondary" onClick={addDishRow}>
+            + Add another dish
+          </button>
           <button onClick={addGuest} className="primary">Add</button>
         </div>
       </section>
@@ -572,33 +763,43 @@ export default function App(){
               Nothing here yet. Sign up above ✨
             </div>
           )}
-          {!isLoading && filtered.map(g=>(
-            <div key={g.id} className="list-row">
-              <div className="list-main">
-                <div className="list-name">{g.name}</div>
-                {g.dish && <div className="muted">{g.dish}</div>}
-                <div className="muted" style={{fontSize:12}}>
-                  {g.categories && g.categories.length > 0 && (
-                    <>
-                      {g.categories.map(c => title(c)).join(', ')}
-                      {' · '}
-                    </>
+          {!isLoading && filtered.map(g=>{
+            const guestDishes = dishesByGuestId[g.id] || []
+            return (
+              <div key={g.id} className="list-row">
+                <div className="list-main">
+                  <div className="list-name">{g.name}</div>
+                  {guestDishes.length > 0 && (
+                    <div className="muted" style={{fontSize:12}}>
+                      {guestDishes.map(d => `${d.name} (${title(d.category)})`).join(', ')}
+                    </div>
                   )}
-                  RSVP: {g.rsvp}
-                  {g.notes ? ` · ${g.notes}` : ''}
+                  <div className="muted" style={{fontSize:12}}>
+                    RSVP: {g.rsvp}
+                    {g.notes ? ` · ${g.notes}` : ''}
+                  </div>
+                </div>
+                <div className="list-actions">
+                  <button
+                    className="secondary"
+                    onClick={()=>{
+                      setEdit({...g})
+                      const ds = dishesByGuestId[g.id] || []
+                      setEditDishes(ds.map(d => ({
+                        id: d.id,
+                        name: d.name || '',
+                        category: d.category || 'other'
+                      })))
+                      setEditOpen(true)
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button className="ghost" onClick={()=>removeGuest(g.id)}>Remove</button>
                 </div>
               </div>
-              <div className="list-actions">
-                <button
-                  className="secondary"
-                  onClick={()=>{ setEdit({...g}); setEditOpen(true) }}
-                >
-                  Edit
-                </button>
-                <button className="ghost" onClick={()=>removeGuest(g.id)}>Remove</button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </section>
 
@@ -606,6 +807,7 @@ export default function App(){
         <div className="modal-backdrop" onClick={()=>setEditOpen(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div className="modal-header">Edit Entry</div>
+
             <div className="row">
               <div className="field" style={{flex:1}}>
                 <label>Name</label>
@@ -615,43 +817,6 @@ export default function App(){
                   type="text"
                 />
               </div>
-              <div className="field" style={{flex:1}}>
-                <label>Dish</label>
-                <input
-                  value={edit?.dish||''}
-                  onChange={e=>setEdit(prev => ({...prev, dish:e.target.value}))}
-                  type="text"
-                />
-              </div>
-            </div>
-            <div className="row" style={{marginTop:10}}>
-              <div className="field" style={{flex:'1 1 100%'}}>
-                <label>Dish Type</label>
-                <div className="cat-checks">
-                  {CATEGORIES.map(c => {
-                    const has = (edit?.categories||[]).includes(c)
-                    return (
-                      <label key={c} className="cat-check">
-                        <input
-                          type="checkbox"
-                          checked={has}
-                          onChange={()=>{
-                            setEdit(prev => {
-                              const hasCurrent = (prev.categories||[]).includes(c)
-                              const nextCats = hasCurrent
-                                ? prev.categories.filter(x=>x!==c)
-                                : [...(prev.categories||[]), c]
-                              return { ...prev, categories: nextCats }
-                            })
-                          }}
-                        /> {title(c)}
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-            <div className="row" style={{marginTop:10}}>
               <div className="field" style={{maxWidth:180}}>
                 <label>RSVP</label>
                 <select
@@ -663,7 +828,10 @@ export default function App(){
                   <option>no</option>
                 </select>
               </div>
-              <div className="field" style={{flex:1}}>
+            </div>
+
+            <div className="row" style={{marginTop:10}}>
+              <div className="field" style={{flex:'1 1 100%'}}>
                 <label>Notes</label>
                 <input
                   value={edit?.notes||''}
@@ -672,9 +840,74 @@ export default function App(){
                 />
               </div>
             </div>
-            <div className="modal-actions">
-              <button className="secondary" onClick={()=>setEditOpen(false)}>Cancel</button>
-              <button className="primary" onClick={saveEdit}>Save</button>
+
+            <div style={{marginTop:12, marginBottom:4, fontSize:12, color:'var(--muted)'}}>
+              Dishes for this guest
+            </div>
+
+            {editDishes.map((d, index) => (
+              <div className="row" key={d.id || index}>
+                <div className="field" style={{flex:1.4}}>
+                  <label>{editDishes.length > 1 ? `Dish #${index+1}` : 'Dish'}</label>
+                  <input
+                    type="text"
+                    value={d.name}
+                    onChange={e=>{
+                      const value = e.target.value
+                      setEditDishes(prev => prev.map((x,i) =>
+                        i === index ? { ...x, name:value } : x
+                      ))
+                    }}
+                  />
+                </div>
+                <div className="field" style={{maxWidth:180}}>
+                  <label>Dish Type</label>
+                  <select
+                    value={d.category}
+                    onChange={e=>{
+                      const value = e.target.value
+                      setEditDishes(prev => prev.map((x,i) =>
+                        i === index ? { ...x, category:value } : x
+                      ))
+                    }}
+                  >
+                    {CATEGORIES.map(c => (
+                      <option key={c} value={c}>{title(c)}</option>
+                    ))}
+                  </select>
+                </div>
+                {editDishes.length > 1 && (
+                  <div style={{display:'flex', alignItems:'flex-end'}}>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={()=>{
+                        setEditDishes(prev =>
+                          prev.length <= 1 ? prev : prev.filter((_,i) => i !== index)
+                        )
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <div style={{display:'flex', justifyContent:'space-between', marginTop:10}}>
+              <button
+                type="button"
+                className="secondary"
+                onClick={()=>setEditDishes(prev => [...prev, { name:'', category:'main' }])}
+              >
+                + Add dish
+              </button>
+              <div className="modal-actions" style={{marginTop:0}}>
+                <button className="secondary" onClick={()=>{ setEditOpen(false); setEdit(null); setEditDishes([]) }}>
+                  Cancel
+                </button>
+                <button className="primary" onClick={saveEdit}>Save</button>
+              </div>
             </div>
           </div>
         </div>
