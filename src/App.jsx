@@ -5,81 +5,66 @@ const CATEGORIES = ["starter","main","side","dessert","drink","other"]
 
 function title(s){ return s.replace(/\b\w/g, m=>m.toUpperCase()) }
 
-function Panda({ headerRef, anchorRef }){
+function Panda(){
   const elRef = React.useRef(null)
   const posRef = React.useRef({ x: 0, y: 0 })
   const targetRef = React.useRef({ x: 0, y: 0 })
 
-  // Initial placement + smooth follow loop
   React.useEffect(() => {
-    const header = headerRef.current
-    const anchor = anchorRef.current
     const el = elRef.current
-    if (!header || !anchor || !el) return
+    if (!el) return
 
-    const hb = header.getBoundingClientRect()
-    const ab = anchor.getBoundingClientRect()
+    const margin = 40
 
-    const initial = {
-      x: ab.left - hb.left + ab.width / 2,
-      y: ab.top - hb.top + ab.height / 2,
+    function randomTarget() {
+      const w = window.innerWidth || 800
+      const h = window.innerHeight || 600
+      return {
+        x: margin + Math.random() * Math.max(100, w - margin * 2),
+        y: margin + Math.random() * Math.max(100, h - margin * 2),
+      }
     }
 
-    posRef.current = initial
-    targetRef.current = initial
-    el.style.transform = `translate(${initial.x}px,${initial.y}px)`
+    // Start somewhere near the middle
+    posRef.current = randomTarget()
+    targetRef.current = randomTarget()
+    el.style.transform = `translate(${posRef.current.x}px,${posRef.current.y}px)`
 
     let raf
-    function step(){
+
+    function step() {
       const { x, y } = posRef.current
       const { x: tx, y: ty } = targetRef.current
-      const spring = 0.12
+      const speed = 0.02 // lower = more floaty
 
-      const nx = x + (tx - x) * spring
-      const ny = y + (ty - y) * spring
+      const nx = x + (tx - x) * speed
+      const ny = y + (ty - y) * speed
 
       posRef.current = { x: nx, y: ny }
       el.style.transform = `translate(${nx}px,${ny}px)`
+
+      const dist = Math.hypot(tx - nx, ty - ny)
+      if (dist < 10) {
+        targetRef.current = randomTarget()
+      }
+
       raf = requestAnimationFrame(step)
     }
 
     raf = requestAnimationFrame(step)
-    return () => cancelAnimationFrame(raf)
-  }, [headerRef, anchorRef])
 
-  // Run away from the mouse when it's too close
-  React.useEffect(() => {
-    const header = headerRef.current
-    if (!header) return
-
-    function clamp(v, min, max){ return Math.max(min, Math.min(max, v)) }
-
-    function onMove(e){
-      const hb = header.getBoundingClientRect()
-      const mx = e.clientX - hb.left
-      const my = e.clientY - hb.top
-
-      const { x: px, y: py } = posRef.current
-      const dx = px - mx
-      const dy = py - my
-      const dist = Math.hypot(dx, dy) || 1
-
-      const threshold = 90
-      if (dist < threshold){
-        const away = threshold - dist + 40
-        let nx = px + (dx / dist) * away
-        let ny = py + (dy / dist) * away
-
-        nx = clamp(nx, 24, hb.width - 24)
-        ny = clamp(ny, 24, hb.height - 24)
-
-        targetRef.current = { x: nx, y: ny }
-      }
+    function handleResize() {
+      // When screen size changes, pick a new wander target
+      targetRef.current = randomTarget()
     }
 
-    window.addEventListener('mousemove', onMove)
-    return () => window.removeEventListener('mousemove', onMove)
-  }, [headerRef])
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [])
 
   return (
     <div ref={elRef} className="panda">
@@ -122,9 +107,6 @@ export default function App(){
   const [edit, setEdit] = React.useState(null)
   const [editOpen, setEditOpen] = React.useState(false)
   const [editDishes, setEditDishes] = React.useState([])
-
-  const headerRef = React.useRef(null)
-  const sparkleRef = React.useRef(null)
 
   // ---- Load guests ----
   const loadGuests = React.useCallback(async () => {
@@ -473,11 +455,14 @@ export default function App(){
 
   return (
     <div className="container">
+      {/* floating panda above everything */}
+      <Panda />
+
       {/* HEADER SUMMARY */}
-      <header ref={headerRef} className="header card header-bounds" id="header">
+      <header className="header card header-bounds" id="header">
         <div>
           <h1>
-            Potluck Planner <span ref={sparkleRef} className="sparkle">✨</span>
+            Potluck Planner <span className="sparkle">✨</span>
           </h1>
         </div>
 
@@ -507,8 +492,6 @@ export default function App(){
             <span className="items-badge">{distinctGuests} guests responded</span>
           </div>
         </div>
-
-        <Panda headerRef={headerRef} anchorRef={sparkleRef} />
       </header>
 
       {/* PARTY DETAILS */}
@@ -625,7 +608,7 @@ export default function App(){
       <section className="card dishes-card">
         <div className="section-header-row">
           <h2 className="section-title">Dishes</h2>
-          <div className="muted" style={{fontSize:12}}></div>
+          <div className="muted" style={{fontSize:12}}>Quick view of what’s on the table</div>
         </div>
         <div className="grid grid-6 dishes-grid">
           {CATEGORIES.map(c => {

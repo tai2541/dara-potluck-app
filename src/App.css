@@ -173,7 +173,7 @@ button:disabled{
 /* Panda */
 
 .panda{
-  position:absolute;
+  position:fixed;    /* <--- was absolute; now glides over whole app */
   z-index:30;
   user-select:none;
   pointer-events:none;
