@@ -371,3 +371,10 @@ button:disabled{
   border-top:1px dashed var(--border);
   padding-top:8px;
 }
+
+/* Prevent iOS Safari from zooming when typing in inputs */
+input,
+select,
+textarea {
+  font-size: 16px !important;
+}
