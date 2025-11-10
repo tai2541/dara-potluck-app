@@ -5,6 +5,19 @@ const CATEGORIES = ["starter","main","side","dessert","drink","other"]
 
 function title(s){ return s.replace(/\b\w/g, m=>m.toUpperCase()) }
 
+function formatPartyDateTime(value){
+  if (!value) return ''
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value  // fallback to raw string
+  return d.toLocaleString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
 function Panda(){
   const elRef = React.useRef(null)
   const posRef = React.useRef({ x: 0, y: 0 })
@@ -263,6 +276,29 @@ export default function App(){
     params.set('text', text)
     if (detailsParts.length) params.set('details', detailsParts.join('\n'))
     if (partyLocation) params.set('location', partyLocation)
+
+    // Try to parse Date/Time and set a proper start/end for Google Calendar
+    if (partyDateTime) {
+      const start = new Date(partyDateTime)   // works great with datetime-local
+
+      if (!Number.isNaN(start.getTime())) {
+        // Default to a 2-hour event
+        const end = new Date(start.getTime() + 2 * 60 * 60 * 1000)
+
+        const toCal = (d) => {
+          const pad = (n) => String(n).padStart(2, '0')
+          const year = d.getUTCFullYear()
+          const month = pad(d.getUTCMonth() + 1)
+          const day = pad(d.getUTCDate())
+          const hours = pad(d.getUTCHours())
+          const mins = pad(d.getUTCMinutes())
+          const secs = pad(d.getUTCSeconds())
+          return `${year}${month}${day}T${hours}${mins}${secs}Z`
+        }
+
+        params.set('dates', `${toCal(start)}/${toCal(end)}`)
+      }
+    }
 
     return `${base}&${params.toString()}`
   }, [partyName, partyDateTime, partyLocation, partyNotes])
@@ -536,7 +572,10 @@ export default function App(){
               {partyName || <span className="party-placeholder">No party name yet</span>}
             </div>
             <div className="party-meta">
-              {partyDateTime || <span className="party-placeholder">No date/time set</span>}
+              {partyDateTime
+                ? formatPartyDateTime(partyDateTime)
+                : <span className="party-placeholder">No date/time set</span>
+              }
               {(partyDateTime || partyLocation) && ' · '}
               {partyLocation || <span className="party-placeholder">No location added</span>}
             </div>
@@ -561,9 +600,9 @@ export default function App(){
             <div className="field">
               <label>Date/Time</label>
               <input
-                type="text"
+                type="datetime-local"
                 value={partyDateTime}
-                onChange={e=>setPartyDateTime(e.target.value)}
+                onChange={e => setPartyDateTime(e.target.value)}
               />
             </div>
 
